@@ -1,1 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trading Terminal & Replay Simulator</title>
+  <!-- TradingView Open-Source Library for Replay Mode -->
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <!-- TradingView Free Terminal Script -->
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background-color: #131722;
+      color: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
 
+    /* Top Navigation Tabs */
+    .nav-bar {
+      display: flex;
+      background-color: #1e222d;
+      border-bottom: 1px solid #2a2e39;
+      padding: 8px 16px;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: 1px solid #363a45;
+      color: #b2b5be;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+
+    .tab-btn:hover { background: #2a2e39; color: #fff; }
+    .tab-btn.active {
+      background: #2962ff;
+      border-color: #2962ff;
+      color: #ffffff;
+    }
+
+    /* Container Views */
+    .view-container {
+      flex: 1;
+      width: 100%;
+      height: calc(100vh - 53px);
+      position: relative;
+    }
+
+    .view {
+      display: none;
+      width: 100%;
+      height: 100%;
+    }
+
+    .view.active { display: block; }
+
+    /* Replay Controls Toolbar */
+    .replay-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      background-color: #131722;
+      border-bottom: 1px solid #2a2e39;
+      flex-wrap: wrap;
+    }
+
+    .replay-toolbar button, .replay-toolbar select {
+      background: #2962ff;
+      color: #fff;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .replay-toolbar button:hover { background: #1e54e4; }
+
+    #replay-chart-box {
+      width: 100%;
+      height: calc(100% - 53px);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <div class="nav-bar">
+    <button class="tab-btn active" onclick="switchView('terminal')">📈 Full Terminal</button>
+    <button class="tab-btn" onclick="switchView('replay')">🔄 Replay Mode (No Login)</button>
+  </div>
+
+  <!-- Main View Container -->
+  <div class="view-container">
+
+    <!-- VIEW 1: FULL TRADINGVIEW TERMINAL -->
+    <div id="terminal-view" class="view active">
+      <div id="tv_chart_container" style="width:100%; height:100%;"></div>
+    </div>
+
+    <!-- VIEW 2: REPLAY SIMULATOR -->
+    <div id="replay-view" class="view">
+      <div class="replay-toolbar">
+        <button id="playBtn">▶ Play</button>
+        <button id="stepBtn">⏭ Next Bar</button>
+        <button id="resetBtn">🔄 Reset</button>
+        <label style="font-size:0.85rem; display:flex; align-items:center; gap:5px;">
+          Speed:
+          <select id="speedSelect">
+            <option value="1000">1 bar/sec</option>
+            <option value="500" selected>2 bars/sec</option>
+            <option value="200">5 bars/sec</option>
+          </select>
+        </label>
+        <span id="status" style="margin-left: auto; font-size:0.85rem; color:#787b86;">Loading BTC...</span>
+      </div>
+      <div id="replay-chart-box"></div>
+    </div>
+
+  </div>
+
+  <script>
+    // --- 1. Tab Switching Logic ---
+    function switchView(viewName) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+
+      if (viewName === 'terminal') {
+        document.querySelectorAll('.tab-btn')[0].classList.add('active');
+        document.getElementById('terminal-view').classList.add('active');
+      } else {
+        document.querySelectorAll('.tab-btn')[1].classList.add('active');
+        document.getElementById('replay-view').classList.add('active');
+        if (!replayInitialized) initReplayChart();
+      }
+    }
+
+    // --- 2. Initialize Full TradingView Terminal Widget ---
+    new TradingView.widget({
+      "autosize": true,
+      "symbol": "BINANCE:BTCUSDT",
+      "interval": "D",
+      "timezone": "Etc/UTC",
+      "theme": "dark",
+      "style": "1",
+      "locale": "en",
+      "hide_side_toolbar": false,
+      "hide_top_toolbar": false,
+      "allow_symbol_change": true,
+      "save_image": true,
+      "withdateranges": true,
+      "details": true,
+      "hotlist": true,
+      "calendar": true,
+      "news": ["headlines"],
+      "watchlist": ["BINANCE:BTCUSDT", "BINANCE:ETHUSDT", "NASDAQ:AAPL", "NASDAQ:NVDA", "OANDA:XAUUSD"],
+      "studies": ["RSI@tv-basicstudies", "MASimple@tv-basicstudies"],
+      "container_id": "tv_chart_container"
+    });
+
+    // --- 3. Initialize Replay Chart (Lightweight Charts) ---
+    let replayInitialized = false;
+    let fullData = [], currentIndex = 30, isPlaying = false, replayTimer = null;
+    let chart, candleSeries;
+
+    function initReplayChart() {
+      replayInitialized = true;
+      const container = document.getElementById('replay-chart-box');
+
+      chart = LightweightCharts.createChart(container, {
+        layout: { backgroundColor: '#131722', textColor: '#d1d4dc' },
+        grid: { vertLines: { color: '#1f2432' }, horzLines: { color: '#1f2432' } }
+      });
+
+      candleSeries = chart.addCandlestickSeries({
+        upColor: '#089981', downColor: '#f23645',
+        borderUpColor: '#089981', borderDownColor: '#f23645'
+      });
+
+      // Fetch BTC candles from Binance REST API
+      fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=200')
+        .then(res => res.json())
+        .then(rawData => {
+          fullData = rawData.map(d => ({
+            time: d[0] / 1000,
+            open: parseFloat(d[1]),
+            high: parseFloat(d[2]),
+            low: parseFloat(d[3]),
+            close: parseFloat(d[4])
+          }));
+          candleSeries.setData(fullData.slice(0, currentIndex));
+          document.getElementById('status').innerText = `Bar ${currentIndex} of ${fullData.length}`;
+        });
+
+      // Window Resize Listener
+      window.addEventListener('resize', () => {
+        chart.resize(container.clientWidth, container.clientHeight);
+      });
+    }
+
+    // --- 4. Replay Control Button Actions ---
+    function stepForward() {
+      if (currentIndex < fullData.length) {
+        candleSeries.update(fullData[currentIndex++]);
+        document.getElementById('status').innerText = `Bar ${currentIndex} of ${fullData.length}`;
+      } else { pauseReplay(); }
+    }
+
+    function playReplay() {
+      isPlaying = true;
+      document.getElementById('playBtn').innerText = '⏸ Pause';
+      replayTimer = setInterval(stepForward, parseInt(document.getElementById('speedSelect').value));
+    }
+
+    function pauseReplay() {
+      isPlaying = false;
+      document.getElementById('playBtn').innerText = '▶ Play';
+      clearInterval(replayTimer);
+    }
+
+    document.getElementById('playBtn').onclick = () => isPlaying ? pauseReplay() : playReplay();
+    document.getElementById('stepBtn').onclick = () => { pauseReplay(); stepForward(); };
+    document.getElementById('resetBtn').onclick = () => {
+      pauseReplay();
+      currentIndex = 30;
+      candleSeries.setData(fullData.slice(0, currentIndex));
+      document.getElementById('status').innerText = `Bar ${currentIndex} of ${fullData.length}`;
+    };
+  </script>
+</body>
+</html>
