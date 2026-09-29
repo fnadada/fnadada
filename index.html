@@ -3,76 +3,175 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>My Live Trading Charts</title>
+  <title>Free No-Login Chart Replay</title>
+  <!-- Official TradingView Lightweight Charts Library -->
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       background-color: #131722;
       color: #ffffff;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       display: flex;
       flex-direction: column;
       height: 100vh;
-      overflow: hidden;
     }
-    header {
-      background-color: #1e222d;
-      padding: 15px 20px;
-      border-bottom: 1px solid #2a2e39;
+    
+    .toolbar {
       display: flex;
-      justify-content: space-between;
       align-items: center;
+      gap: 12px;
+      padding: 12px 20px;
+      background-color: #1e222d;
+      border-bottom: 1px solid #2a2e39;
+      flex-wrap: wrap;
     }
-    header h1 {
-      font-size: 1.2rem;
+
+    button, select {
+      background: #2962ff;
+      color: #fff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
       font-weight: 600;
-      color: #d1d4dc;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: background 0.2s;
     }
-    .main-container {
+
+    button:hover { background: #1e54e4; }
+    button:disabled { background: #363a45; color: #787b86; cursor: not-allowed; }
+
+    .status-text {
+      margin-left: auto;
+      font-size: 0.85rem;
+      color: #787b86;
+    }
+
+    #chart-container {
       flex: 1;
       width: 100%;
-      height: calc(100vh - 55px);
-    }
-    #tradingview_widget {
-      width: 100%;
-      height: 100%;
     }
   </style>
 </head>
 <body>
 
-  <header>
-    <h1>📈 Live Market Chart</h1>
-  </header>
+  <div class="toolbar">
+    <button id="playBtn">▶ Play Replay</button>
+    <button id="stepBtn">⏭ Next Bar</button>
+    <button id="resetBtn">🔄 Reset Replay</button>
+    
+    <label style="display:flex; align-items:center; gap:6px; font-size:0.85rem;">
+      Speed:
+      <select id="speedSelect">
+        <option value="1000">1 bar/sec</option>
+        <option value="500" selected>2 bars/sec</option>
+        <option value="200">5 bars/sec</option>
+        <option value="100">10 bars/sec</option>
+      </select>
+    </label>
 
-  <div class="main-container">
-    <div id="tradingview_widget"></div>
+    <div class="status-text" id="status">Loading historical candles...</div>
   </div>
 
-  <!-- TradingView Library Script -->
-  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-  <script type="text/javascript">
-    new TradingView.widget({
-      "autosize": true,
-      "symbol": "BINANCE:BTCUSDT",
-      "interval": "D",
-      "timezone": "Etc/UTC",
-      "theme": "dark",
-      "style": "1",
-      "locale": "en",
-      "toolbar_bg": "#f1f3f6",
-      "enable_publishing": false,
-      "allow_symbol_change": true,
-      "details": true,
-      "hotlist": true,
-      "calendar": true,
-      "hide_side_toolbar": false,
-      "container_id": "tradingview_widget"
+  <div id="chart-container"></div>
+
+  <script>
+    let fullData = [];
+    let currentIndex = 30; // Start replay showing initial 30 candles
+    let isPlaying = false;
+    let replayTimer = null;
+
+    // 1. Initialize TradingView Lightweight Chart
+    const container = document.getElementById('chart-container');
+    const chart = LightweightCharts.createChart(container, {
+      layout: { backgroundColor: '#131722', textColor: '#d1d4dc' },
+      grid: { vertLines: { color: '#1f2432' }, horzLines: { color: '#1f2432' } },
+      timeScale: { timeVisible: true, secondsVisible: false }
     });
+
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: '#089981', downColor: '#f23645',
+      borderUpColor: '#089981', borderDownColor: '#f23645',
+      wickUpColor: '#089981', wickDownColor: '#f23645'
+    });
+
+    // 2. Fetch Real Historical BTC/USDT Candles from Public Binance REST API (No auth needed)
+    async function loadRealData() {
+      try {
+        const response = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=200');
+        const rawData = await response.json();
+        
+        fullData = rawData.map(item => ({
+          time: item[0] / 1000, // Unix timestamp in seconds
+          open: parseFloat(item[1]),
+          high: parseFloat(item[2]),
+          low: parseFloat(item[3]),
+          close: parseFloat(item[4])
+        }));
+
+        renderChart();
+      } catch (err) {
+        document.getElementById('status').innerText = 'Error loading market data.';
+        console.error(err);
+      }
+    }
+
+    // 3. Render initial slice of data
+    function renderChart() {
+      candleSeries.setData(fullData.slice(0, currentIndex));
+      updateStatus();
+    }
+
+    function updateStatus() {
+      document.getElementById('status').innerText = `Bar ${currentIndex} of ${fullData.length}`;
+    }
+
+    // 4. Replay Control Functions
+    function stepForward() {
+      if (currentIndex < fullData.length) {
+        candleSeries.update(fullData[currentIndex]);
+        currentIndex++;
+        updateStatus();
+      } else {
+        pauseReplay();
+      }
+    }
+
+    function playReplay() {
+      isPlaying = true;
+      document.getElementById('playBtn').innerText = '⏸ Pause';
+      const intervalMs = parseInt(document.getElementById('speedSelect').value);
+      replayTimer = setInterval(stepForward, intervalMs);
+    }
+
+    function pauseReplay() {
+      isPlaying = false;
+      document.getElementById('playBtn').innerText = '▶ Play Replay';
+      clearInterval(replayTimer);
+    }
+
+    // Event Handlers
+    document.getElementById('playBtn').onclick = () => isPlaying ? pauseReplay() : playReplay();
+    document.getElementById('stepBtn').onclick = () => { pauseReplay(); stepForward(); };
+    document.getElementById('resetBtn').onclick = () => {
+      pauseReplay();
+      currentIndex = 30;
+      renderChart();
+    };
+
+    document.getElementById('speedSelect').onchange = () => {
+      if (isPlaying) {
+        pauseReplay();
+        playReplay();
+      }
+    };
+
+    // Auto resize chart window
+    window.onresize = () => chart.resize(container.clientWidth, container.clientHeight);
+
+    // Initial Start
+    loadRealData();
   </script>
 
 </body>
